@@ -1,17 +1,26 @@
 {
   "name": "drawzzl-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Real-time drawing & guessing game",
+  "main": "dist/index.js",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "socket.io",
+    "express",
+    "mongoose",
+    "draw",
+    "game"
+  ],
+  "author": "Pranav Nigade",
+  "license": "MIT",
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
