@@ -1,4 +1,4 @@
-import { GameConfig } from '../types/index.js';
+import type { GameConfig } from '../types/index.js';
 
 export const gameConfig: GameConfig = {
   ROOM_TICK_MS: 1000,

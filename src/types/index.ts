@@ -1,12 +1,12 @@
-export interface Player {
+export type Player = {
   id: string;
   name: string;
   score: number;
   isDrawer?: boolean;
-}
+};
 
-export interface GameConfig {
+export type GameConfig = {
   ROOM_TICK_MS: number;
   TURN_SECONDS: number;
   MAX_ROUNDS: number;
-}
+};

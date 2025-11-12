@@ -1,4 +1,4 @@
-import { Player } from '../types/index.js';
+import type { Player } from '../types/index.js';
 
 export function generateRoomId(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();

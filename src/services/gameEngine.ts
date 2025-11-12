@@ -1,6 +1,6 @@
 import { Server } from 'socket.io';
 import { Room } from '../models/Room.js';
-import { Player } from '../types/index.js';
+import type { Player } from '../types/index.js';
 import { gameConfig, WORDS } from '../config/game.js';
 import { getDrawer, getDrawerIndex, hasPlayers, maskWord } from '../utils/helpers.js';
 

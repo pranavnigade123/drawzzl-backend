@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { Room } from '../models/Room.js';
-import { Player } from '../types/index.js';
+import type { Player } from '../types/index.js';
 import { generateRoomId, getDrawer, sanitizeInput } from '../utils/helpers.js';
 import { endTurn, roomIntervals, startTurn } from '../services/gameEngine.js';
 
