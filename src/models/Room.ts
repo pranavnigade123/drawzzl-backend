@@ -1,4 +1,4 @@
-﻿// src/models/Room.ts
+// src/models/Room.ts
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface Player {
@@ -34,6 +34,7 @@ export interface IRoom extends Document {
   turnEndsAt?: Date;                 // server-authoritative turn end
   correctGuessers: string[];         // socket ids of correct guessers for this turn
   chat: ChatItem[];                  // minimal chat feed
+  revealedPositions: number[];       // positions of revealed letters for progressive hints
 
   createdAt: Date;
 }

@@ -2,7 +2,7 @@ import { Server, Socket } from 'socket.io';
 import { Room } from '../models/Room.js';
 import type { Player } from '../types/index.js';
 import { generateRoomId, getDrawer, sanitizeInput } from '../utils/helpers.js';
-import { endTurn, roomIntervals, startTurn } from '../services/gameEngine.js';
+import { endTurn, roomIntervals, startTurn, startTurnWithWord } from '../services/gameEngine.js';
 
 export function registerSocketHandlers(io: Server, socket: Socket) {
   console.log('Player connected:', socket.id);
@@ -91,6 +91,27 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       startTurn(io, room);
     } catch (err) {
       socket.emit('error', { message: 'Failed to start game' });
+    }
+  });
+
+  // WORD SELECTION
+  socket.on('selectWord', async ({ roomId, word }) => {
+    try {
+      const room = await Room.findOne({ roomId });
+      if (!room) return;
+
+      const drawer = getDrawer(room);
+      if (drawer?.id !== socket.id) {
+        return socket.emit('error', { message: 'Only drawer can select word' });
+      }
+
+      // Validate word is from the choices (basic security)
+      const sanitizedWord = sanitizeInput(word, 50);
+      if (!sanitizedWord) return;
+
+      startTurnWithWord(io, room, sanitizedWord);
+    } catch (err) {
+      console.error('Error in word selection:', err);
     }
   });
 

@@ -2,7 +2,14 @@ import { Server } from 'socket.io';
 import { Room } from '../models/Room.js';
 import type { Player } from '../types/index.js';
 import { gameConfig, WORDS } from '../config/game.js';
-import { getDrawer, getDrawerIndex, hasPlayers, maskWord } from '../utils/helpers.js';
+import {
+  getDrawer,
+  getDrawerIndex,
+  hasPlayers,
+  maskWord,
+  generateWordChoices,
+  generateProgressiveHint,
+} from '../utils/helpers.js';
 
 const { ROOM_TICK_MS, TURN_SECONDS } = gameConfig;
 
@@ -60,6 +67,7 @@ export async function endTurn(io: Server, roomId: string) {
     // Intermission then next turn
     room.currentWord = undefined;
     room.correctGuessers = [];
+    room.revealedPositions = [];
 
     // Use retry logic for save
     await saveWithRetry(room, roomId);
@@ -74,25 +82,67 @@ export async function endTurn(io: Server, roomId: string) {
 }
 
 export function startTurn(io: Server, room: any) {
+  try {
+    if (!hasPlayers(room)) return;
+
+    // Mark drawer on players array
+    const safeIdx = getDrawerIndex(room);
+    room.players = room.players.map((p: Player, idx: number) => ({
+      ...p,
+      isDrawer: idx === safeIdx,
+    }));
+
+    const drawer = getDrawer(room);
+
+    // Generate 3 random word choices
+    const wordChoices = generateWordChoices(3);
+
+    // Send word choices to drawer
+    if (drawer?.id) {
+      io.to(drawer.id).emit('chooseWord', {
+        words: wordChoices,
+        timeLimit: 10, // 10 seconds to choose
+      });
+    }
+
+    // Set a timeout for auto-selection if drawer doesn't choose
+    setTimeout(async () => {
+      try {
+        // Check if word was already chosen
+        const freshRoom = await Room.findOne({ roomId: room.roomId });
+        if (freshRoom && !freshRoom.currentWord && freshRoom.gameStarted) {
+          // Auto-select first word if no choice made
+          const autoWord = wordChoices[0];
+          startTurnWithWord(io, freshRoom, autoWord);
+        }
+      } catch (err) {
+        console.error('Error in auto-select timeout:', err);
+      }
+    }, 10000);
+
+    room.gameStarted = true;
+    room.correctGuessers = [];
+
+    // Save the room state
+    room.markModified?.('players');
+    void room.save();
+  } catch (err) {
+    console.error('Error in startTurn:', err);
+    throw err;
+  }
+}
+
+export function startTurnWithWord(io: Server, room: any, word: string) {
   if (!hasPlayers(room)) return;
 
-  // Pick new word and set timing
-  const word = WORDS[Math.floor(Math.random() * WORDS.length)] || 'default';
   room.currentWord = word;
-  room.correctGuessers = [];
-  room.gameStarted = true;
   room.turnEndsAt = new Date(Date.now() + TURN_SECONDS * 1000);
-
-  // Mark drawer on players array
-  const safeIdx = getDrawerIndex(room);
-  room.players = room.players.map((p: Player, idx: number) => ({
-    ...p,
-    isDrawer: idx === safeIdx,
-  }));
+  room.revealedPositions = []; // Reset revealed positions for new turn
 
   // Broadcast start-of-turn state
   const hint = maskWord(word);
   const drawer = getDrawer(room);
+  
   io.to(room.roomId).emit('gameStarted', {
     drawerId: drawer?.id ?? null,
     wordHint: hint,
@@ -116,7 +166,32 @@ export function startTurn(io: Server, room: any) {
 
     const endsAt = r.turnEndsAt ? new Date(r.turnEndsAt).getTime() : 0;
     const secs = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
-    io.to(room.roomId).emit('tick', { timeLeft: secs });
+
+    // Generate progressive hint with persistent positions
+    let progressiveHint = maskWord(r.currentWord || '');
+    if (r.currentWord) {
+      const result = generateProgressiveHint(
+        r.currentWord,
+        secs,
+        TURN_SECONDS,
+        r.revealedPositions || []
+      );
+      progressiveHint = result.hint;
+
+      // Update revealed positions in database if changed
+      if (
+        JSON.stringify(result.revealedPositions) !==
+        JSON.stringify(r.revealedPositions)
+      ) {
+        r.revealedPositions = result.revealedPositions;
+        await r.save().catch((err) => console.error('Error saving hint:', err));
+      }
+    }
+
+    io.to(room.roomId).emit('tick', {
+      timeLeft: secs,
+      wordHint: progressiveHint,
+    });
 
     // End when timer hits zero or all guessers (except drawer) finished
     const everyoneGuessed =
