@@ -469,6 +469,7 @@ io.on('connection', (socket: Socket) => {
       room.maxRounds = settings.rounds || 3;
       room.drawTime = Math.max(30, Math.min(180, settings.drawTime || 60));
       room.wordCount = Math.max(3, Math.min(5, settings.wordCount || 3));
+      room.maxPlayers = Math.max(2, Math.min(15, settings.maxPlayers || 8));
       
       // Parse custom words
       const customWordsStr = settings.customWords || '';
@@ -488,6 +489,7 @@ io.on('connection', (socket: Socket) => {
         wordCount: room.wordCount,
         customWords: room.customWords.join(', '),
         customWordProbability: room.customWordProbability,
+        maxPlayers: room.maxPlayers,
       });
 
       console.log(`Settings updated for room ${roomId}`);
