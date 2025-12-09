@@ -18,6 +18,16 @@ interface Player {
 
 const app = express();
 app.use(cors());
+
+// Health check endpoint for monitoring
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime() 
+  });
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { 
