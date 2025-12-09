@@ -6,6 +6,7 @@ export interface Player {
   name: string;
   score: number;
   isDrawer?: boolean;
+  avatar?: number[]; // [colorIdx, eyeIdx, mouthIdx, accessoryIdx]
 }
 
 export interface ChatItem {
@@ -35,6 +36,16 @@ export interface IRoom extends Document {
   correctGuessers: string[];         // socket ids of correct guessers for this turn
   chat: ChatItem[];                  // minimal chat feed
 
+  // game settings
+  drawTime: number;                  // seconds per turn (30-180)
+  wordCount: number;                 // number of word choices (3-5)
+  customWords: string[];             // custom words list
+  customWordProbability: number;     // 0-100 percentage
+
+  // round tracking
+  roundPoints: Map<string, number>;  // playerId -> points earned this round
+  revealedLetters: number[];         // indices of revealed letters
+
   createdAt: Date;
 }
 
@@ -57,6 +68,7 @@ const RoomSchema = new Schema<IRoom>(
         name: { type: String, required: true },
         score: { type: Number, default: 0 },
         isDrawer: { type: Boolean, default: false },
+        avatar: { type: [Number], default: [0, 0, 0, 0] },
       },
     ],
     maxPlayers: { type: Number, default: 8 },
@@ -71,6 +83,16 @@ const RoomSchema = new Schema<IRoom>(
     turnEndsAt: { type: Date },
     correctGuessers: { type: [String], default: [] },
     chat: { type: [ChatSchema], default: [] },
+
+    // game settings
+    drawTime: { type: Number, default: 60 },
+    wordCount: { type: Number, default: 3 },
+    customWords: { type: [String], default: [] },
+    customWordProbability: { type: Number, default: 0 },
+
+    // round tracking
+    roundPoints: { type: Map, of: Number, default: new Map() },
+    revealedLetters: { type: [Number], default: [] },
 
     createdAt: { type: Date, default: Date.now },
   },

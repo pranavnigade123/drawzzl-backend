@@ -1,0 +1,128 @@
+{
+  "categories": {
+    "animals": [
+      "cat", "dog", "elephant", "giraffe", "lion", "tiger", "bear", "monkey", "zebra", "penguin",
+      "dolphin", "whale", "shark", "octopus", "butterfly", "bee", "spider", "snake", "frog", "turtle",
+      "rabbit", "mouse", "hamster", "squirrel", "deer", "horse", "cow", "pig", "sheep", "chicken",
+      "duck", "owl", "eagle", "parrot", "flamingo", "peacock", "kangaroo", "koala", "panda", "fox",
+      "crocodile", "rhinoceros", "hippopotamus", "cheetah", "leopard", "gorilla", "dragonfly", "ladybug", "grasshopper"
+    ],
+    "food": [
+      "apple", "banana", "orange", "grape", "strawberry", "watermelon", "pineapple", "mango", "lemon", "cherry",
+      "pizza", "burger", "hotdog", "sandwich", "taco", "sushi", "pasta", "noodles", "rice", "bread",
+      "cake", "cookie", "donut", "icecream", "chocolate", "candy", "popcorn", "cheese", "egg", "bacon",
+      "coffee", "tea", "juice", "milk", "soda", "water", "smoothie", "milkshake",
+      "hamburger", "spaghetti", "macaroni", "lasagna", "burrito", "enchilada", "quesadilla",
+      "marshmallow", "lollipop", "cupcake", "brownie", "pancake", "waffle", "pretzel",
+      "blueberry", "raspberry", "blackberry", "cranberry", "pumpkin", "cucumber", "zucchini", 
+      "broccoli", "cauliflower", "asparagus", "artichoke", "cinnamon", "vanilla", "caramel", 
+      "butterscotch", "peppermint", "spearmint"
+    ],
+    "objects": [
+      "phone", "computer", "laptop", "keyboard", "mouse", "camera", "television", "radio", "clock", "watch",
+      "book", "pencil", "pen", "eraser", "ruler", "scissors", "glue", "paper", "notebook", "backpack",
+      "chair", "table", "bed", "sofa", "lamp", "mirror", "door", "window", "key", "lock",
+      "umbrella", "hat", "glasses", "shoe", "sock", "shirt", "pants", "dress", "jacket", "scarf",
+      "ball", "balloon", "kite", "toy", "doll", "robot", "puzzle", "dice", "cards", "chess",
+      "telephone", "microphone", "headphones", "calculator", "telescope", "microscope", "binoculars", 
+      "compass", "thermometer", "barometer", "speedometer", "suitcase", "briefcase", "sunglasses", 
+      "necklace", "bracelet", "earring", "stethoscope", "periscope", "kaleidoscope",
+      "refrigerator", "dishwasher", "microwave", "toaster", "blender", "vacuum", "washing",
+      "chandelier", "fireplace", "staircase", "balcony", "chimney", "basement", "attic"
+    ],
+    "nature": [
+      "tree", "flower", "grass", "leaf", "branch", "root", "seed", "garden", "forest", "jungle",
+      "mountain", "hill", "valley", "river", "lake", "ocean", "beach", "island", "desert", "volcano",
+      "sun", "moon", "star", "cloud", "rain", "snow", "lightning", "rainbow", "wind", "storm",
+      "house", "building", "castle", "tower", "bridge", "road", "street", "park", "playground", "school",
+      "waterfall", "tornado", "hurricane", "earthquake", "snowflake", "icicle", "avalanche", 
+      "blizzard", "sandstorm", "thunderstorm", "pyramid", "skyscraper", "lighthouse", "windmill", 
+      "fountain", "monument", "statue", "library", "hospital", "restaurant", "supermarket", 
+      "pharmacy", "bakery", "factory", "warehouse", "glacier", "canyon", "plateau", "peninsula", 
+      "archipelago", "continent", "sunflower", "dandelion", "daffodil", "tulip", "orchid", 
+      "carnation", "chrysanthemum"
+    ],
+    "vehicles": [
+      "car", "bus", "truck", "train", "bicycle", "motorcycle", "scooter", "skateboard", "boat", "ship",
+      "airplane", "helicopter", "rocket", "submarine", "taxi", "ambulance", "firetruck", "police",
+      "rollerblades", "trampoline", "parachute", "spaceship", "satellite", "bulldozer", 
+      "excavator", "tractor"
+    ],
+    "music": [
+      "guitar", "piano", "drum", "violin", "flute", "trumpet", "microphone", "speaker", "headphones",
+      "movie", "theater", "stage", "circus", "magic", "dance", "song", "music",
+      "saxophone", "harmonica", "accordion", "tambourine"
+    ],
+    "sports": [
+      "soccer", "basketball", "baseball", "tennis", "golf", "swimming", "running", "jumping", "climbing",
+      "skiing", "surfing", "fishing", "camping", "hiking", "painting", "drawing", "reading", "writing",
+      "volleyball", "badminton", "gymnastics", "skateboarding", "snowboarding", "wrestling", 
+      "archery", "fencing", "bowling"
+    ],
+    "body": [
+      "hand", "foot", "head", "eye", "nose", "mouth", "ear", "arm", "leg", "finger",
+      "toe", "hair", "face", "smile", "heart", "brain", "tooth", "tongue"
+    ],
+    "emotions": [
+      "happy", "sad", "angry", "scared", "surprised", "excited", "tired", "sleepy", "hungry", "thirsty",
+      "laugh", "cry", "sleep", "eat", "drink", "walk", "run", "jump", "dance", "sing"
+    ],
+    "shapes": [
+      "circle", "square", "triangle", "rectangle", "star", "heart", "diamond", "oval", "arrow",
+      "red", "blue", "green", "yellow", "orange", "purple", "pink", "black", "white", "brown"
+    ],
+    "fantasy": [
+      "fire", "water", "ice", "smoke", "shadow", "light", "dark", "magic", "treasure", "crown",
+      "sword", "shield", "flag", "medal", "trophy", "gift", "present", "party", "birthday", "celebration",
+      "money", "coin", "diamond", "gold", "silver", "crystal", "gem", "pearl",
+      "doctor", "nurse", "teacher", "student", "chef", "artist", "musician", "dancer", "athlete",
+      "king", "queen", "prince", "princess", "knight", "pirate", "ninja", "superhero", "monster", "dragon",
+      "astronaut", "scientist", "engineer", "architect", "detective", "firefighter", "policeman",
+      "magician", "wizard", "sorcerer", "vampire", "werewolf", "zombie", "skeleton", "mummy",
+      "unicorn", "pegasus", "centaur", "minotaur", "phoenix", "griffin", "hydra", "kraken",
+      "adventure", "mystery", "journey", "expedition", "exploration", "discovery",
+      "champion", "warrior", "gladiator", "samurai", "crusader", "guardian", "protector",
+      "emerald", "sapphire", "ruby", "topaz", "amethyst", "turquoise", "opal", "jade"
+    ],
+    "insects": [
+      "caterpillar", "firefly", "mosquito", "scorpion", "tarantula"
+    ]
+  },
+  "difficulty": {
+    "easy": [
+      "cat", "dog", "sun", "moon", "star", "tree", "car", "bus", "ball", "book",
+      "pen", "cup", "hat", "bed", "door", "fish", "bird", "hand", "foot", "eye",
+      "apple", "house", "pizza", "boat", "cake", "fire", "water", "ice", "snow", "rain"
+    ],
+    "medium": [
+      "elephant", "guitar", "pizza", "castle", "rainbow", "mountain", "airplane", "bicycle",
+      "flower", "camera", "pencil", "umbrella", "balloon", "rocket", "dragon", "treasure",
+      "giraffe", "penguin", "dolphin", "butterfly", "monkey", "tiger", "lion", "zebra",
+      "sandwich", "chocolate", "cookie", "burger", "hotdog", "noodles", "spaghetti",
+      "computer", "keyboard", "telephone", "backpack", "scissors", "notebook", "mirror",
+      "volcano", "island", "desert", "forest", "jungle", "bridge", "tower", "castle",
+      "helicopter", "submarine", "motorcycle", "skateboard", "trumpet", "violin", "piano",
+      "basketball", "football", "swimming", "camping", "fishing", "painting", "dancing",
+      "unicorn", "wizard", "pirate", "knight", "princess", "monster", "superhero"
+    ],
+    "hard": [
+      "rhinoceros", "hippopotamus", "kaleidoscope", "refrigerator", "chrysanthemum",
+      "archipelago", "stethoscope", "microscope", "excavator", "chandelier",
+      "crocodile", "caterpillar", "grasshopper", "dragonfly", "tarantula",
+      "watermelon", "strawberry", "marshmallow", "quesadilla", "cauliflower",
+      "television", "calculator", "telescope", "binoculars", "thermometer",
+      "skyscraper", "lighthouse", "monument", "restaurant", "supermarket",
+      "trampoline", "parachute", "spaceship", "bulldozer", "ambulance",
+      "saxophone", "harmonica", "accordion", "tambourine", "xylophone",
+      "skateboarding", "snowboarding", "gymnastics", "badminton", "volleyball",
+      "astronaut", "scientist", "architect", "detective", "firefighter",
+      "werewolf", "vampire", "skeleton", "centaur", "minotaur", "phoenix"
+    ]
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "totalWords": 400,
+    "lastUpdated": "2024-12-09",
+    "description": "Drawzzl word dictionary with categorized and difficulty-rated words"
+  }
+}
