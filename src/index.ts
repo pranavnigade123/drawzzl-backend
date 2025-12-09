@@ -33,7 +33,9 @@ const io = new Server(server, {
   cors: { 
     origin: [
       'http://localhost:3000',
-      /\.vercel\.app$/ // Allow all Vercel deployments
+      /\.vercel\.app$/, // Allow all Vercel deployments
+      'https://drawzzl.drawfive.in',
+      /\.drawfive\.in$/ // Allow all drawfive.in subdomains
     ],
     credentials: true 
   },
