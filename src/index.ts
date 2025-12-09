@@ -20,7 +20,14 @@ const app = express();
 app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*' },
+  cors: { 
+    origin: [
+      'http://localhost:3000',
+      'https://drawzzl-frontend-xxxx.vercel.app', // Replace with your actual Vercel URL
+      /\.vercel\.app$/ // Allow all Vercel preview deployments
+    ],
+    credentials: true 
+  },
 });
 
 // ---------------------------------------------------------------------
