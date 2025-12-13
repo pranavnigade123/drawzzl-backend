@@ -140,7 +140,13 @@ function getDrawerIndex(room: any): number {
   if (len === 0) return 0;
   const idx = typeof room?.drawerIndex === 'number' ? room.drawerIndex : 0;
   // clamp between 0 and len-1
-  return Math.min(Math.max(0, idx), len - 1);
+  const clampedIdx = Math.min(Math.max(0, idx), len - 1);
+  
+  if (idx !== clampedIdx) {
+    console.log(`[DRAWER DEBUG] DrawerIndex clamped: ${idx} -> ${clampedIdx} (players: ${len})`);
+  }
+  
+  return clampedIdx;
 }
 
 function getDrawer(room: any): Player | undefined {
@@ -184,17 +190,27 @@ async function endTurn(io: Server, roomId: string) {
 
   // Rotate drawer safely
   if (room.players.length > 0) {
-    const nextIdx = (getDrawerIndex(room) + 1) % room.players.length;
+    const currentIdx = getDrawerIndex(room);
+    const currentDrawer = getDrawer(room);
+    console.log(`[DRAWER DEBUG] Turn ending - Current drawer: ${currentDrawer?.name} (index: ${currentIdx})`);
+    
+    const nextIdx = (currentIdx + 1) % room.players.length;
+    const nextDrawer = room.players[nextIdx];
     room.drawerIndex = nextIdx;
+
+    console.log(`[DRAWER DEBUG] Drawer rotation: ${currentIdx}:${currentDrawer?.name} -> ${nextIdx}:${nextDrawer?.name} (${room.players.length} players)`);
 
     // If wrapped, increment round
     if (nextIdx === 0) {
       room.round = (room.round || 1) + 1;
+      console.log(`[DRAWER DEBUG] Round incremented to: ${room.round} (wrapped back to first player)`);
     }
   }
 
   // Game end?
   if ((room.round || 1) > (room.maxRounds || 3)) {
+    console.log(`[DRAWER DEBUG] Game ending - Final round: ${room.round}, Max rounds: ${room.maxRounds}`);
+    
     const t = roomIntervals.get(roomId);
     if (t) clearInterval(t);
     roomIntervals.delete(roomId);
@@ -205,17 +221,28 @@ async function endTurn(io: Server, roomId: string) {
     room.currentWord = undefined;
     room.correctGuessers = [];
     await room.save();
+    
+    console.log(`[DRAWER DEBUG] Game ended and state reset`);
     return;
   }
 
   // Intermission then next turn (5 seconds for results display)
   room.currentWord = undefined;
   room.correctGuessers = [];
+  
+  console.log(`[DRAWER DEBUG] Saving room state - drawerIndex: ${room.drawerIndex}, round: ${room.round}`);
   await room.save();
+  console.log(`[DRAWER DEBUG] Room state saved successfully`);
 
   setTimeout(async () => {
+    console.log(`[DRAWER DEBUG] Loading fresh room data after 5 second delay...`);
     const fresh = await Room.findOne({ roomId });
-    if (fresh) startTurn(io, fresh);
+    if (fresh) {
+      console.log(`[DRAWER DEBUG] Fresh room loaded - drawerIndex: ${fresh.drawerIndex}, round: ${fresh.round}, next drawer: ${fresh.players[fresh.drawerIndex]?.name}`);
+      startTurn(io, fresh);
+    } else {
+      console.log(`[DRAWER DEBUG] ERROR: Could not load fresh room data!`);
+    }
   }, 5000);
 }
 
@@ -261,6 +288,8 @@ function startTurn(io: Server, room: any) {
 
   const drawer = getDrawer(room);
   if (!drawer) return;
+
+  console.log(`[DRAWER DEBUG] Turn starting - Round ${room.round}, Selected drawer: ${drawer.name} (index: ${room.drawerIndex}), Total players: ${room.players.length}`);
 
   // Generate word choices
   const wordCount = room.wordCount || 3;
@@ -633,6 +662,8 @@ io.on('connection', (socket: Socket) => {
       room.drawerIndex = 0;
       await room.save();
 
+      console.log(`[DRAWER DEBUG] Game starting - Players: [${room.players.map((p, i) => `${i}:${p.name}`).join(', ')}], Initial drawerIndex: ${room.drawerIndex}`);
+      
       startTurn(io, room);
     } catch (err) {
       socket.emit('error', { message: 'Failed to start game' });
@@ -755,13 +786,20 @@ io.on('connection', (socket: Socket) => {
       // Check if disconnecting player was the host (first player)
       const wasHost = room.players.length > 0 && room.players[0]?.id === socket.id;
       const hostName = room.players[0]?.name;
+      const disconnectingPlayer = room.players.find(p => p.id === socket.id);
+      
+      console.log(`[DRAWER DEBUG] Player disconnecting: ${disconnectingPlayer?.name}, drawerIndex before: ${room.drawerIndex}, players before: ${room.players.length}`);
 
       // Remove player
       room.players = room.players.filter((p: Player) => p.id !== socket.id);
 
+      console.log(`[DRAWER DEBUG] After player removal - players: ${room.players.length}, drawerIndex: ${room.drawerIndex}`);
+
       // If the drawer index is now out of range, clamp it
       if ((room.drawerIndex ?? 0) >= room.players.length) {
+        const oldIndex = room.drawerIndex;
         room.drawerIndex = 0;
+        console.log(`[DRAWER DEBUG] DrawerIndex out of range! Changed from ${oldIndex} to ${room.drawerIndex}`);
       }
 
       await room.save();
