@@ -72,6 +72,7 @@ const DRAWER_BONUS_PER_GUESSER = 50;
 // Track per-room ticking intervals
 const roomIntervals = new Map<string, NodeJS.Timeout>();
 const wordSelectionTimeouts = new Map<string, NodeJS.Timeout>();
+const endTurnInProgress = new Map<string, boolean>();
 
 function maskWord(word: string, revealedIndices: number[] = []) {
   return word
@@ -160,8 +161,21 @@ function hasPlayers(room: any): boolean {
 }
 
 async function endTurn(io: Server, roomId: string) {
-  const room = await Room.findOne({ roomId });
-  if (!room || !hasPlayers(room)) return;
+  // Prevent duplicate endTurn calls
+  if (endTurnInProgress.get(roomId)) {
+    console.log(`[DRAWER DEBUG] EndTurn already in progress for room ${roomId}, skipping duplicate call`);
+    return;
+  }
+  
+  endTurnInProgress.set(roomId, true);
+  console.log(`[DRAWER DEBUG] EndTurn started for room ${roomId}`);
+  
+  try {
+    const room = await Room.findOne({ roomId });
+    if (!room || !hasPlayers(room)) {
+      endTurnInProgress.delete(roomId);
+      return;
+    }
 
   // Drawer bonus: flat bonus per correct guesser
   const drawer = getDrawer(room);
@@ -223,6 +237,7 @@ async function endTurn(io: Server, roomId: string) {
     await room.save();
     
     console.log(`[DRAWER DEBUG] Game ended and state reset`);
+    endTurnInProgress.delete(roomId);
     return;
   }
 
@@ -230,20 +245,54 @@ async function endTurn(io: Server, roomId: string) {
   room.currentWord = undefined;
   room.correctGuessers = [];
   
-  console.log(`[DRAWER DEBUG] Saving room state - drawerIndex: ${room.drawerIndex}, round: ${room.round}`);
-  await room.save();
-  console.log(`[DRAWER DEBUG] Room state saved successfully`);
-
-  setTimeout(async () => {
-    console.log(`[DRAWER DEBUG] Loading fresh room data after 5 second delay...`);
-    const fresh = await Room.findOne({ roomId });
-    if (fresh) {
-      console.log(`[DRAWER DEBUG] Fresh room loaded - drawerIndex: ${fresh.drawerIndex}, round: ${fresh.round}, next drawer: ${fresh.players[fresh.drawerIndex]?.name}`);
-      startTurn(io, fresh);
-    } else {
-      console.log(`[DRAWER DEBUG] ERROR: Could not load fresh room data!`);
+    console.log(`[DRAWER DEBUG] Saving room state - drawerIndex: ${room.drawerIndex}, round: ${room.round}`);
+    
+    // Handle MongoDB version conflicts with retry
+    let saveAttempts = 0;
+    const maxAttempts = 3;
+    
+    while (saveAttempts < maxAttempts) {
+      try {
+        await room.save();
+        console.log(`[DRAWER DEBUG] Room state saved successfully (attempt ${saveAttempts + 1})`);
+        break;
+      } catch (error: any) {
+        saveAttempts++;
+        if (error.name === 'VersionError' && saveAttempts < maxAttempts) {
+          console.log(`[DRAWER DEBUG] Version conflict, retrying save (attempt ${saveAttempts + 1}/${maxAttempts})`);
+          // Reload fresh data and retry
+          const freshRoom = await Room.findOne({ roomId });
+          if (freshRoom) {
+            freshRoom.drawerIndex = room.drawerIndex;
+            freshRoom.round = room.round;
+            freshRoom.currentWord = room.currentWord;
+            freshRoom.correctGuessers = room.correctGuessers;
+            room = freshRoom;
+          }
+        } else {
+          console.log(`[DRAWER DEBUG] Failed to save room state after ${saveAttempts} attempts:`, error);
+          throw error;
+        }
+      }
     }
-  }, 5000);
+
+    setTimeout(async () => {
+      console.log(`[DRAWER DEBUG] Loading fresh room data after 5 second delay...`);
+      const fresh = await Room.findOne({ roomId });
+      if (fresh) {
+        console.log(`[DRAWER DEBUG] Fresh room loaded - drawerIndex: ${fresh.drawerIndex}, round: ${fresh.round}, next drawer: ${fresh.players[fresh.drawerIndex]?.name}`);
+        startTurn(io, fresh);
+      } else {
+        console.log(`[DRAWER DEBUG] ERROR: Could not load fresh room data!`);
+      }
+      // Clear the endTurn lock after starting next turn
+      endTurnInProgress.delete(roomId);
+    }, 5000);
+    
+  } catch (error) {
+    console.log(`[DRAWER DEBUG] Error in endTurn for room ${roomId}:`, error);
+    endTurnInProgress.delete(roomId);
+  }
 }
 
 // Select words based on custom word probability and difficulty
@@ -382,9 +431,13 @@ function startDrawingPhase(io: Server, room: any, word: string, drawTime: number
     io.to(drawer.id).emit('yourWord', { word });
   }
 
-  // Reset interval for this room
+  // Reset interval for this room - CRITICAL: Clear old timer first
   const prev = roomIntervals.get(room.roomId);
-  if (prev) clearInterval(prev);
+  if (prev) {
+    console.log(`[DRAWER DEBUG] Clearing previous timer for room ${room.roomId}`);
+    clearInterval(prev);
+    roomIntervals.delete(room.roomId);
+  }
 
   // Calculate hint reveal times
   const halfTime = Math.floor(drawTime / 2);
@@ -438,6 +491,7 @@ function startDrawingPhase(io: Server, room: any, word: string, drawTime: number
     const everyoneGuessed = (r.correctGuessers?.length || 0) >= Math.max(0, (r.players.length - 1));
 
       if (secs <= 0 || everyoneGuessed) {
+        console.log(`[DRAWER DEBUG] Timer ending for room ${room.roomId} - Time: ${secs}s, Everyone guessed: ${everyoneGuessed}`);
         clearInterval(timer);
         roomIntervals.delete(room.roomId);
         await endTurn(io, room.roomId);
@@ -813,6 +867,7 @@ io.on('connection', (socket: Socket) => {
         const wst = wordSelectionTimeouts.get(roomId);
         if (wst) clearTimeout(wst);
         wordSelectionTimeouts.delete(roomId);
+        endTurnInProgress.delete(roomId);
         console.log(`Room ${roomId} deleted – empty`);
         continue;
       }
