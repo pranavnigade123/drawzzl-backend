@@ -267,7 +267,8 @@ async function endTurn(io: Server, roomId: string) {
             freshRoom.round = room.round;
             freshRoom.currentWord = room.currentWord;
             freshRoom.correctGuessers = room.correctGuessers;
-            room = freshRoom;
+            // Update room properties instead of reassigning
+            Object.assign(room, freshRoom);
           }
         } else {
           console.log(`[DRAWER DEBUG] Failed to save room state after ${saveAttempts} attempts:`, error);
