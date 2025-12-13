@@ -39,6 +39,12 @@ const io = new Server(server, {
     ],
     credentials: true 
   },
+  // Production optimizations
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  upgradeTimeout: 30000,
+  allowEIO3: true,
+  transports: ['websocket', 'polling'],
 });
 
 // ---------------------------------------------------------------------
@@ -363,12 +369,13 @@ function startDrawingPhase(io: Server, room: any, word: string, drawTime: number
   };
 
   const timer = setInterval(async () => {
-    const r = await Room.findOne({ roomId: room.roomId });
-    if (!r || !r.currentWord) return;
+    try {
+      const r = await Room.findOne({ roomId: room.roomId });
+      if (!r || !r.currentWord) return;
 
-    const endsAt = r.turnEndsAt ? new Date(r.turnEndsAt).getTime() : 0;
-    const now = Date.now();
-    const secs = Math.max(0, Math.ceil((endsAt - now) / 1000));
+      const endsAt = r.turnEndsAt ? new Date(r.turnEndsAt).getTime() : 0;
+      const now = Date.now();
+      const secs = Math.max(0, Math.ceil((endsAt - now) / 1000));
     
     // Reveal first hint at half time
     if (!hintState.firstRevealed && secs <= firstHintTime && secs > secondHintTime) {
@@ -401,10 +408,14 @@ function startDrawingPhase(io: Server, room: any, word: string, drawTime: number
     // End when timer hits zero or all guessers (except drawer) finished
     const everyoneGuessed = (r.correctGuessers?.length || 0) >= Math.max(0, (r.players.length - 1));
 
-    if (secs <= 0 || everyoneGuessed) {
-      clearInterval(timer);
-      roomIntervals.delete(room.roomId);
-      await endTurn(io, room.roomId);
+      if (secs <= 0 || everyoneGuessed) {
+        clearInterval(timer);
+        roomIntervals.delete(room.roomId);
+        await endTurn(io, room.roomId);
+      }
+    } catch (error) {
+      console.error('Timer error for room', room.roomId, error);
+      // Continue running timer even if one iteration fails
     }
   }, ROOM_TICK_MS);
 
@@ -454,7 +465,11 @@ io.on('connection', (socket: Socket) => {
 
       socket.join(roomId);
       socket.emit('roomCreated', { roomId, playerId: socket.id });
-      socket.emit('playerJoined', { players: newRoom.players });
+      
+      // Ensure creator gets player list
+      const playerUpdate = { players: newRoom.players };
+      socket.emit('playerJoined', playerUpdate);
+      
       console.log(`Room ${roomId} created by ${playerName}`);
     } catch (err) {
       socket.emit('error', { message: 'Failed to create room' });
@@ -547,8 +562,13 @@ io.on('connection', (socket: Socket) => {
       socket.join(roomId);
       socket.emit('roomJoined', { roomId });
 
-      // broadcast fresh player list
-      io.to(roomId).emit('playerJoined', { players: room.players });
+      // broadcast fresh player list with acknowledgment
+      const playerUpdate = { players: room.players };
+      io.to(roomId).emit('playerJoined', playerUpdate);
+      
+      // Also send directly to joining player as backup
+      socket.emit('playerJoined', playerUpdate);
+      
       console.log(`${playerName} joined ${roomId}`);
     } catch (err) {
       socket.emit('error', { message: 'Failed to join room' });
@@ -771,8 +791,14 @@ io.on('connection', (socket: Socket) => {
         }
       }
 
-      // broadcast updated players list
-      io.to(roomId).emit('playerJoined', { players: room.players });
+      // broadcast updated players list with retry
+      const playerUpdate = { players: room.players };
+      io.to(roomId).emit('playerJoined', playerUpdate);
+      
+      // Also emit to all sockets in room as backup
+      setTimeout(() => {
+        io.to(roomId).emit('playerJoined', playerUpdate);
+      }, 100);
     }
   });
 });
