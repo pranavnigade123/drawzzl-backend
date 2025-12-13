@@ -16,6 +16,23 @@
 
 ---
 
+## ⚠️ Disclaimer
+
+> **Educational & Portfolio Project**
+> 
+> This project is developed as an **educational exercise** and **technical portfolio piece**. While inspired by popular drawing and guessing games like Skribbl.io, this project is **not intended to compete with, replicate, or harm any existing games or services**.
+>
+> **Purpose of this project:**
+> - Demonstrate full-stack development capabilities
+> - Explore real-time communication technologies (Socket.IO, WebSockets)
+> - Practice scalable backend architecture design
+> - Showcase modern web development skills
+> - Create a learning resource for the developer community
+>
+> We acknowledge and respect the creativity and hard work of the original game developers in this genre. This implementation is built entirely from scratch as a technical learning exercise and portfolio demonstration.
+
+---
+
 ## ⚡ Features
 
 ### 🎯 **Real-time Game Engine**
