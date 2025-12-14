@@ -202,9 +202,9 @@ const CHAT_RATE_LIMIT = 10; // Max 10 messages per minute
 const CHAT_RATE_WINDOW = 60000; // 1 minute
 
 // Room cleanup constants
-const ROOM_CLEANUP_INTERVAL = 10 * 60 * 1000; // Check every 10 minutes
-const ROOM_EXPIRY_TIME = 60 * 60 * 1000; // 1 hour of inactivity
-const EMPTY_ROOM_EXPIRY = 5 * 60 * 1000; // 5 minutes for empty rooms
+const ROOM_CLEANUP_INTERVAL = 2 * 60 * 1000; // Check every 2 minutes (more frequent)
+const ROOM_EXPIRY_TIME = 20 * 60 * 1000; // 20 minutes of inactivity (matches max game duration)
+const EMPTY_ROOM_EXPIRY = 2 * 60 * 1000; // 2 minutes for empty rooms (faster cleanup)
 
 function maskWord(word: string, revealedIndices: number[] = []) {
   return word
@@ -276,7 +276,7 @@ function getDrawerIndex(room: any): number {
   const clampedIdx = Math.min(Math.max(0, idx), len - 1);
   
   if (idx !== clampedIdx) {
-    console.log(`[DRAWER DEBUG] DrawerIndex clamped: ${idx} -> ${clampedIdx} (players: ${len})`);
+    console.log(`[DRAWER] DrawerIndex clamped: ${idx} -> ${clampedIdx} (players: ${len})`);
   }
   
   return clampedIdx;
@@ -295,12 +295,10 @@ function hasPlayers(room: any): boolean {
 async function endTurn(io: Server, roomId: string) {
   // Prevent duplicate endTurn calls
   if (endTurnInProgress.get(roomId)) {
-    console.log(`[DRAWER DEBUG] EndTurn already in progress for room ${roomId}, skipping duplicate call`);
     return;
   }
   
   endTurnInProgress.set(roomId, true);
-  console.log(`[DRAWER DEBUG] EndTurn started for room ${roomId}`);
   
   try {
     const room = await Room.findOne({ roomId });
@@ -340,19 +338,12 @@ async function endTurn(io: Server, roomId: string) {
   // Rotate drawer safely
   if (room.players.length > 0) {
     const currentIdx = getDrawerIndex(room);
-    const currentDrawer = getDrawer(room);
-    console.log(`[DRAWER DEBUG] Turn ending - Current drawer: ${currentDrawer?.name} (index: ${currentIdx})`);
-    
     const nextIdx = (currentIdx + 1) % room.players.length;
-    const nextDrawer = room.players[nextIdx];
     room.drawerIndex = nextIdx;
-
-    console.log(`[DRAWER DEBUG] Drawer rotation: ${currentIdx}:${currentDrawer?.name} -> ${nextIdx}:${nextDrawer?.name} (${room.players.length} players)`);
 
     // If wrapped, increment round
     if (nextIdx === 0) {
       room.round = (room.round || 1) + 1;
-      console.log(`[DRAWER DEBUG] Round incremented to: ${room.round} (wrapped back to first player)`);
     }
   }
 
