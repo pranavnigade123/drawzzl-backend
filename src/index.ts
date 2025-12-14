@@ -826,26 +826,20 @@ io.on('connection', (socket: Socket) => {
         return;
       }
 
-      console.log(`[RECONNECT DEBUG] Reconnection attempt - Session: ${sessionId}, Room: ${roomId}`);
+      console.log(`[SESSION] Reconnection attempt - Session ${sessionId} to room ${roomId}`);
       
       const room = await Room.findOne({ roomId });
       if (!room) {
-        console.log(`[RECONNECT DEBUG] Room ${roomId} not found`);
         socket.emit('error', { message: 'Room not found' });
         return;
       }
 
-      console.log(`[RECONNECT DEBUG] Room found: ${room.roomId}, Players: ${room.players.length}, Game started: ${room.gameStarted}`);
-
       // Find player by session ID
       const player = room.players.find((p: Player) => p.sessionId === sessionId);
       if (!player) {
-        console.log(`[RECONNECT DEBUG] Session ${sessionId} not found in room ${roomId}`);
         socket.emit('error', { message: 'Session not found in room' });
         return;
       }
-
-      console.log(`[RECONNECT DEBUG] Player found: ${player.name}, Was connected: ${player.isConnected}`);
 
       // Update player's socket ID and connection status
       player.id = socket.id;
@@ -861,8 +855,6 @@ io.on('connection', (socket: Socket) => {
       const currentDrawer = getDrawer(room);
       const timeLeft = room.turnEndsAt ? Math.max(0, Math.ceil((new Date(room.turnEndsAt).getTime() - Date.now()) / 1000)) : 0;
       
-      console.log(`[RECONNECT DEBUG] Host check - First player: ${room.players[0]?.name} (${room.players[0]?.sessionId}), Reconnecting: ${player.name} (${sessionId}), IsHost: ${isHost}`);
-
       const gameState = {
         gameStarted: room.gameStarted,
         round: room.round,
@@ -876,8 +868,6 @@ io.on('connection', (socket: Socket) => {
         recentChat: room.chat.slice(-10) || []
       };
 
-      console.log(`[RECONNECT DEBUG] Sending game state - Started: ${gameState.gameStarted}, Round: ${gameState.round}, TimeLeft: ${gameState.timeLeft}, IsYourTurn: ${gameState.isYourTurn}, DrawingLines: ${gameState.currentDrawing.length}`);
-
       socket.emit('reconnectionSuccess', {
         roomId,
         sessionId,
@@ -886,10 +876,9 @@ io.on('connection', (socket: Socket) => {
         gameState
       });
 
-      // CRITICAL FIX: Restart turn timer if game is active and no timer exists
+      // Restart turn timer if game is active and no timer exists
       if (room.gameStarted && room.turnEndsAt && !roomIntervals.has(roomId)) {
-        const timeLeft = Math.max(0, Math.ceil((new Date(room.turnEndsAt).getTime() - Date.now()) / 1000));
-        console.log(`[TIMER DEBUG] Restarting turn timer for room ${roomId} after reconnection. Time left: ${timeLeft}s`);
+        console.log(`[SESSION] Restarting timer for room ${roomId}`);
         
         const timer = setInterval(async () => {
           try {
@@ -923,9 +912,6 @@ io.on('connection', (socket: Socket) => {
         }, 1000);
 
         roomIntervals.set(room.roomId, timer);
-        console.log(`[TIMER DEBUG] Timer restarted for room ${room.roomId}`);
-      } else if (room.gameStarted) {
-        console.log(`[TIMER DEBUG] Timer restart skipped - Game: ${room.gameStarted}, TurnEndsAt: ${!!room.turnEndsAt}, HasTimer: ${roomIntervals.has(roomId)}`);
       }
 
       // Notify other players about reconnection
@@ -1017,10 +1003,7 @@ io.on('connection', (socket: Socket) => {
     // Broadcast immediately for low latency
     socket.to(roomId).emit('draw', { lines });
     
-    // Debug: Log drawing activity (throttled)
-    if (Math.random() < 0.01) { // Log 1% of drawing events to avoid spam
-      console.log(`[DRAW DEBUG] Drawing event in room ${roomId}, Lines: ${lines?.length || 0}`);
-    }
+
 
 
     
