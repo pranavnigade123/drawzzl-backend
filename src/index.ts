@@ -192,19 +192,16 @@ const wordSelectionTimeouts = new Map<string, NodeJS.Timeout>();
 const endTurnInProgress = new Map<string, boolean>();
 
 // Rate limiting maps
-const drawingRateLimit = new Map<string, { count: number; resetTime: number }>();
 const chatRateLimit = new Map<string, { count: number; resetTime: number }>();
 
 // Rate limiting constants
-const DRAWING_RATE_LIMIT = 50; // Max 50 drawing events per 5 seconds
-const DRAWING_RATE_WINDOW = 5000; // 5 seconds
 const CHAT_RATE_LIMIT = 10; // Max 10 messages per minute
 const CHAT_RATE_WINDOW = 60000; // 1 minute
 
 // Room cleanup constants
-const ROOM_CLEANUP_INTERVAL = 2 * 60 * 1000; // Check every 2 minutes (more frequent)
-const ROOM_EXPIRY_TIME = 20 * 60 * 1000; // 20 minutes of inactivity (matches max game duration)
-const EMPTY_ROOM_EXPIRY = 2 * 60 * 1000; // 2 minutes for empty rooms (faster cleanup)
+const ROOM_CLEANUP_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
+const ROOM_EXPIRY_TIME = 30 * 60 * 1000; // 30 minutes of inactivity
+const EMPTY_ROOM_EXPIRY = 5 * 60 * 1000; // 5 minutes for empty rooms
 
 function maskWord(word: string, revealedIndices: number[] = []) {
   return word
@@ -829,20 +826,26 @@ io.on('connection', (socket: Socket) => {
         return;
       }
 
-      console.log(`[SESSION] Reconnection attempt - Session: ${sessionId}, Room: ${roomId}`);
+      console.log(`[RECONNECT DEBUG] Reconnection attempt - Session: ${sessionId}, Room: ${roomId}`);
       
       const room = await Room.findOne({ roomId });
       if (!room) {
+        console.log(`[RECONNECT DEBUG] Room ${roomId} not found`);
         socket.emit('error', { message: 'Room not found' });
         return;
       }
 
+      console.log(`[RECONNECT DEBUG] Room found: ${room.roomId}, Players: ${room.players.length}, Game started: ${room.gameStarted}`);
+
       // Find player by session ID
       const player = room.players.find((p: Player) => p.sessionId === sessionId);
       if (!player) {
+        console.log(`[RECONNECT DEBUG] Session ${sessionId} not found in room ${roomId}`);
         socket.emit('error', { message: 'Session not found in room' });
         return;
       }
+
+      console.log(`[RECONNECT DEBUG] Player found: ${player.name}, Was connected: ${player.isConnected}`);
 
       // Update player's socket ID and connection status
       player.id = socket.id;
@@ -858,24 +861,70 @@ io.on('connection', (socket: Socket) => {
       const currentDrawer = getDrawer(room);
       const timeLeft = room.turnEndsAt ? Math.max(0, Math.ceil((new Date(room.turnEndsAt).getTime() - Date.now()) / 1000)) : 0;
 
+      const gameState = {
+        gameStarted: room.gameStarted,
+        round: room.round,
+        maxRounds: room.maxRounds,
+        timeLeft: timeLeft,
+        currentDrawer: currentDrawer,
+        wordHint: room.gameStarted ? maskWord(room.currentWord || '', room.revealedLetters || []) : '',
+        isYourTurn: player.sessionId === currentDrawer?.sessionId,
+        currentDrawing: room.currentDrawing || [],
+        players: room.players,
+        recentChat: room.chat.slice(-10) || []
+      };
+
+      console.log(`[RECONNECT DEBUG] Sending game state - Started: ${gameState.gameStarted}, Round: ${gameState.round}, TimeLeft: ${gameState.timeLeft}, IsYourTurn: ${gameState.isYourTurn}, DrawingLines: ${gameState.currentDrawing.length}`);
+
       socket.emit('reconnectionSuccess', {
         roomId,
         sessionId,
         isHost,
         player: player,
-        gameState: {
-          gameStarted: room.gameStarted,
-          round: room.round,
-          maxRounds: room.maxRounds,
-          timeLeft: timeLeft,
-          currentDrawer: currentDrawer,
-          wordHint: room.gameStarted ? maskWord(room.currentWord || '', room.revealedLetters || []) : '',
-          isYourTurn: player.sessionId === currentDrawer?.sessionId,
-          currentDrawing: room.currentDrawing || [],
-          players: room.players,
-          recentChat: room.chat.slice(-10) || []
-        }
+        gameState
       });
+
+      // CRITICAL FIX: Restart turn timer if game is active and no timer exists
+      if (room.gameStarted && room.turnEndsAt && !roomIntervals.has(roomId)) {
+        const timeLeft = Math.max(0, Math.ceil((new Date(room.turnEndsAt).getTime() - Date.now()) / 1000));
+        console.log(`[TIMER DEBUG] Restarting turn timer for room ${roomId} after reconnection. Time left: ${timeLeft}s`);
+        
+        const timer = setInterval(async () => {
+          try {
+            const r = await Room.findOne({ roomId: room.roomId });
+            if (!r || !r.gameStarted || !r.turnEndsAt) {
+              clearInterval(timer);
+              roomIntervals.delete(room.roomId);
+              return;
+            }
+
+            const secs = Math.max(0, Math.ceil((new Date(r.turnEndsAt).getTime() - Date.now()) / 1000));
+            
+            // Broadcast time update
+            io.to(room.roomId).emit('tick', { timeLeft: secs });
+
+            // Check if everyone guessed correctly
+            const drawer = getDrawer(r);
+            const connectedNonDrawers = r.players.filter(p => p.isConnected && p.sessionId !== drawer?.sessionId).length;
+            const everyoneGuessed = (r.correctGuessers?.length || 0) >= connectedNonDrawers;
+
+            if (secs <= 0 || everyoneGuessed) {
+              clearInterval(timer);
+              roomIntervals.delete(room.roomId);
+              await endTurn(io, room.roomId);
+            }
+          } catch (error) {
+            console.error('[TIMER] Error in reconnected timer:', error);
+            clearInterval(timer);
+            roomIntervals.delete(room.roomId);
+          }
+        }, 1000);
+
+        roomIntervals.set(room.roomId, timer);
+        console.log(`[TIMER DEBUG] Timer restarted for room ${room.roomId}`);
+      } else if (room.gameStarted) {
+        console.log(`[TIMER DEBUG] Timer restart skipped - Game: ${room.gameStarted}, TurnEndsAt: ${!!room.turnEndsAt}, HasTimer: ${roomIntervals.has(roomId)}`);
+      }
 
       // Notify other players about reconnection
       socket.to(roomId).emit('playerReconnected', { 
@@ -963,66 +1012,32 @@ io.on('connection', (socket: Socket) => {
   // DRAW & CLEAR
   // -------------------------------------------------
   socket.on('draw', async ({ roomId, lines }) => {
-    // Rate limiting for drawing events
-    if (!checkRateLimit(socket.id, drawingRateLimit, DRAWING_RATE_LIMIT, DRAWING_RATE_WINDOW)) {
-      socket.emit('error', { message: 'Drawing too fast! Please slow down.' });
-      return;
-    }
-
     // Broadcast immediately for low latency
     socket.to(roomId).emit('draw', { lines });
-
-    // Update room activity
-    updateRoomActivity(roomId);
     
-    // Save drawing state with retry logic to handle version conflicts
+    // Debug: Log drawing activity (throttled)
+    if (Math.random() < 0.01) { // Log 1% of drawing events to avoid spam
+      console.log(`[DRAW DEBUG] Drawing event in room ${roomId}, Lines: ${lines?.length || 0}`);
+    }
+
+
+    
+    // Save drawing state asynchronously (simple)
     setImmediate(async () => {
-      let retries = 3;
-      while (retries > 0) {
-        try {
-          await Room.updateOne(
-            { roomId }, 
-            { 
-              currentDrawing: lines,
-              lastActivity: new Date()
-            }
-          );
-          break; // Success, exit retry loop
-        } catch (error) {
-          retries--;
-          if (retries === 0) {
-            console.error('[CANVAS] Failed to save drawing state after retries:', error);
-          } else {
-            // Wait a bit before retrying
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
-        }
+      try {
+        await Room.updateOne({ roomId }, { currentDrawing: lines });
+      } catch (error) {
+        console.error('[CANVAS] Failed to save drawing state:', error);
       }
     });
   });
 
   socket.on('clearCanvas', async ({ roomId }) => {
-    // Clear saved drawing state with retry logic
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        await Room.updateOne(
-          { roomId }, 
-          { 
-            currentDrawing: [],
-            lastActivity: new Date()
-          }
-        );
-        break; // Success, exit retry loop
-      } catch (error) {
-        retries--;
-        if (retries === 0) {
-          console.error('[CANVAS] Failed to clear drawing state after retries:', error);
-        } else {
-          // Wait a bit before retrying
-          await new Promise(resolve => setTimeout(resolve, 10));
-        }
-      }
+    // Clear saved drawing state (simple)
+    try {
+      await Room.updateOne({ roomId }, { currentDrawing: [] });
+    } catch (error) {
+      console.error('[CANVAS] Failed to clear drawing state:', error);
     }
     
     socket.to(roomId).emit('clearCanvas');
@@ -1050,8 +1065,7 @@ io.on('connection', (socket: Socket) => {
     // Broadcast immediately for fast user feedback
     io.to(roomId).emit('chat', { id: socket.id, name, msg: cleanedMsg });
 
-    // Update room activity and save chat asynchronously
-    updateRoomActivity(roomId);
+    // Save chat asynchronously
     setImmediate(async () => {
       try {
         await Room.updateOne(
@@ -1171,7 +1185,6 @@ io.on('connection', (socket: Socket) => {
     io.to(roomId).emit('chat', { id: socket.id, name, msg: cleanedGuess });
     
     // Save wrong guess to chat history asynchronously
-    updateRoomActivity(roomId);
     setImmediate(async () => {
       try {
         await Room.updateOne(
@@ -1199,7 +1212,6 @@ io.on('connection', (socket: Socket) => {
     console.log('[SESSION] Player disconnected:', socket.id);
 
     // Clean up rate limiting data for this socket
-    drawingRateLimit.delete(socket.id);
     chatRateLimit.delete(socket.id);
 
     // Find all rooms the socket was in (usually one)
@@ -1259,14 +1271,7 @@ io.on('connection', (socket: Socket) => {
 // ---------------------------------------------------------------------
 const PORT = process.env.PORT || 4000;
 
-// Helper function to update room activity
-async function updateRoomActivity(roomId: string) {
-  try {
-    await Room.updateOne({ roomId }, { lastActivity: new Date() });
-  } catch (error) {
-    console.error('[ACTIVITY] Failed to update room activity:', error);
-  }
-}
+
 
 // Initialize database and then start server
 initializeServer();
@@ -1275,13 +1280,6 @@ initializeServer();
 function cleanupRateLimits() {
   const now = Date.now();
   
-  // Clean expired drawing rate limits
-  for (const [socketId, limit] of drawingRateLimit.entries()) {
-    if (now > limit.resetTime) {
-      drawingRateLimit.delete(socketId);
-    }
-  }
-  
   // Clean expired chat rate limits
   for (const [socketId, limit] of chatRateLimit.entries()) {
     if (now > limit.resetTime) {
@@ -1289,7 +1287,7 @@ function cleanupRateLimits() {
     }
   }
   
-  console.log(`[CLEANUP] Rate limits cleaned. Drawing: ${drawingRateLimit.size}, Chat: ${chatRateLimit.size}`);
+  console.log(`[CLEANUP] Rate limits cleaned. Chat: ${chatRateLimit.size}`);
 }
 
 // Start cleanup intervals
