@@ -105,7 +105,7 @@ const RoomSchema = new Schema<IRoom>(
     revealedLetters: { type: [Number], default: [] },
 
     // canvas persistence
-    currentDrawing: { type: [Schema.Types.Mixed], default: [] },
+    currentDrawing: { type: Schema.Types.Mixed, default: [] },
 
     createdAt: { type: Date, default: Date.now },
     lastActivity: { type: Date, default: Date.now },
