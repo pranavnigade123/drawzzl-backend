@@ -23,12 +23,38 @@ const app = express();
 app.use(cors());
 
 // Health check endpoint for monitoring
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime() 
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // Check database connection
+    const dbStatus = dbConnected ? 'connected' : 'disconnected';
+    
+    // Get basic stats
+    const roomCount = await Room.countDocuments();
+    const activeRooms = await Room.countDocuments({ 
+      'players.isConnected': true 
+    });
+
+    res.status(200).json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      database: dbStatus,
+      rooms: {
+        total: roomCount,
+        active: activeRooms
+      },
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Health check failed',
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 const server = http.createServer(app);
@@ -76,6 +102,30 @@ function generateRoomId() {
 
 function generateSessionId() {
   return 'session_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+}
+
+// Rate limiting helper
+function checkRateLimit(
+  socketId: string, 
+  limitMap: Map<string, { count: number; resetTime: number }>,
+  maxCount: number,
+  windowMs: number
+): boolean {
+  const now = Date.now();
+  const userLimit = limitMap.get(socketId);
+
+  if (!userLimit || now > userLimit.resetTime) {
+    // Reset or create new limit
+    limitMap.set(socketId, { count: 1, resetTime: now + windowMs });
+    return true;
+  }
+
+  if (userLimit.count >= maxCount) {
+    return false; // Rate limit exceeded
+  }
+
+  userLimit.count++;
+  return true;
 }
 
 // Room cleanup function
@@ -140,6 +190,16 @@ const DRAWER_BONUS_PER_GUESSER = 50;
 const roomIntervals = new Map<string, NodeJS.Timeout>();
 const wordSelectionTimeouts = new Map<string, NodeJS.Timeout>();
 const endTurnInProgress = new Map<string, boolean>();
+
+// Rate limiting maps
+const drawingRateLimit = new Map<string, { count: number; resetTime: number }>();
+const chatRateLimit = new Map<string, { count: number; resetTime: number }>();
+
+// Rate limiting constants
+const DRAWING_RATE_LIMIT = 50; // Max 50 drawing events per 5 seconds
+const DRAWING_RATE_WINDOW = 5000; // 5 seconds
+const CHAT_RATE_LIMIT = 10; // Max 10 messages per minute
+const CHAT_RATE_WINDOW = 60000; // 1 minute
 
 // Room cleanup constants
 const ROOM_CLEANUP_INTERVAL = 10 * 60 * 1000; // Check every 10 minutes
@@ -912,36 +972,66 @@ io.on('connection', (socket: Socket) => {
   // DRAW & CLEAR
   // -------------------------------------------------
   socket.on('draw', async ({ roomId, lines }) => {
+    // Rate limiting for drawing events
+    if (!checkRateLimit(socket.id, drawingRateLimit, DRAWING_RATE_LIMIT, DRAWING_RATE_WINDOW)) {
+      socket.emit('error', { message: 'Drawing too fast! Please slow down.' });
+      return;
+    }
+
     // Broadcast immediately for low latency
     socket.to(roomId).emit('draw', { lines });
 
     // Update room activity
     updateRoomActivity(roomId);
     
-    // Save drawing state to room for reconnection (async, non-blocking)
+    // Save drawing state with retry logic to handle version conflicts
     setImmediate(async () => {
-      try {
-        const room = await Room.findOne({ roomId });
-        if (room) {
-          room.currentDrawing = lines;
-          await room.save();
+      let retries = 3;
+      while (retries > 0) {
+        try {
+          await Room.updateOne(
+            { roomId }, 
+            { 
+              currentDrawing: lines,
+              lastActivity: new Date()
+            }
+          );
+          break; // Success, exit retry loop
+        } catch (error) {
+          retries--;
+          if (retries === 0) {
+            console.error('[CANVAS] Failed to save drawing state after retries:', error);
+          } else {
+            // Wait a bit before retrying
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
         }
-      } catch (error) {
-        console.error('[CANVAS] Failed to save drawing state:', error);
       }
     });
   });
 
   socket.on('clearCanvas', async ({ roomId }) => {
-    // Clear saved drawing state
-    try {
-      const room = await Room.findOne({ roomId });
-      if (room) {
-        room.currentDrawing = [];
-        await room.save();
+    // Clear saved drawing state with retry logic
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await Room.updateOne(
+          { roomId }, 
+          { 
+            currentDrawing: [],
+            lastActivity: new Date()
+          }
+        );
+        break; // Success, exit retry loop
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          console.error('[CANVAS] Failed to clear drawing state after retries:', error);
+        } else {
+          // Wait a bit before retrying
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
       }
-    } catch (error) {
-      console.error('[CANVAS] Failed to clear drawing state:', error);
     }
     
     socket.to(roomId).emit('clearCanvas');
@@ -951,11 +1041,13 @@ io.on('connection', (socket: Socket) => {
   // CHAT & GUESS
   // -------------------------------------------------
   socket.on('chat', async ({ roomId, msg, name }) => {
-    const room = await Room.findOne({ roomId });
-    if (!room || !msg?.trim()) return;
+    if (!msg?.trim()) return;
 
-    // Update room activity
-    updateRoomActivity(roomId);
+    // Rate limiting for chat messages
+    if (!checkRateLimit(socket.id, chatRateLimit, CHAT_RATE_LIMIT, CHAT_RATE_WINDOW)) {
+      socket.emit('error', { message: 'Sending messages too fast! Please wait a moment.' });
+      return;
+    }
     
     // Validate and filter message
     const cleanedMsg = validateMessage(msg);
@@ -963,27 +1055,48 @@ io.on('connection', (socket: Socket) => {
       socket.emit('error', { message: 'Message blocked: inappropriate content or spam' });
       return;
     }
-    
-    room.chat = Array.isArray(room.chat) ? room.chat : [];
-    room.chat.push({ id: socket.id, name, msg: cleanedMsg, ts: new Date() });
-    await room.save();
+
+    // Broadcast immediately for fast user feedback
     io.to(roomId).emit('chat', { id: socket.id, name, msg: cleanedMsg });
+
+    // Update room activity and save chat asynchronously
+    updateRoomActivity(roomId);
+    setImmediate(async () => {
+      try {
+        await Room.updateOne(
+          { roomId },
+          { 
+            $push: { 
+              chat: { 
+                $each: [{ id: socket.id, name, msg: cleanedMsg, ts: new Date() }],
+                $slice: -50 // Keep only last 50 messages
+              }
+            },
+            lastActivity: new Date()
+          }
+        );
+      } catch (error) {
+        console.error('[CHAT] Failed to save message:', error);
+      }
+    });
   });
 
   socket.on('guess', async ({ roomId, guess, name }) => {
-    const room = await Room.findOne({ roomId });
-    if (!room || !room.currentWord || !room.gameStarted) return;
-
-    // Validate message first (check for profanity in guesses too)
+    // Fast initial validation without database lookup
+    if (!guess?.trim()) return;
+    
     const cleanedGuess = validateMessage(guess);
     if (!cleanedGuess) {
       socket.emit('error', { message: 'Guess blocked: inappropriate content' });
       return;
     }
 
-    // Sanitize input
     const g = cleanedGuess.trim().toLowerCase().replace(/\s+/g, '');
     if (!g) return;
+
+    // Get room data
+    const room = await Room.findOne({ roomId });
+    if (!room || !room.currentWord || !room.gameStarted) return;
 
     const ans = room.currentWord.toLowerCase();
 
@@ -997,48 +1110,95 @@ io.on('connection', (socket: Socket) => {
       const already = room.correctGuessers?.includes(player.sessionId);
       if (isDrawer || already) return;
 
-      room.correctGuessers = Array.isArray(room.correctGuessers) ? room.correctGuessers : [];
-      room.correctGuessers.push(player.sessionId);
-
-      // Calculate points based on time remaining (Linear Decay)
+      // Calculate points based on time remaining
       const endsAt = room.turnEndsAt ? new Date(room.turnEndsAt).getTime() : 0;
       const timeRemaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
       const points = calculatePoints(timeRemaining, TURN_SECONDS);
 
-      player.score = (player.score || 0) + points;
-      // Track round points using sessionId
-      room.roundPoints.set(player.sessionId, points);
-
-      await room.save();
-
-      // Broadcast correct guess
+      // Broadcast correct guess IMMEDIATELY for fast feedback
       io.to(roomId).emit('correctGuess', {
         playerId: player.sessionId,
         name,
         points,
-        total: player.score,
+        total: (player.score || 0) + points,
       });
 
-      // Everyone (except drawer) guessed → end early
-      const connectedNonDrawers = room.players.filter(p => p.isConnected && p.sessionId !== drawer?.sessionId).length;
-      if ((room.correctGuessers?.length || 0) >= connectedNonDrawers) {
-        await endTurn(io, roomId);
-      }
-    } else {
-      // Check for "close" guess using edit distance
-      const distance = getEditDistance(g, ans);
+      // Update database asynchronously
+      setImmediate(async () => {
+        try {
+          // Use atomic operations to prevent conflicts
+          const updateResult = await Room.updateOne(
+            { 
+              roomId,
+              'players.sessionId': player.sessionId,
+              correctGuessers: { $ne: player.sessionId } // Ensure not already guessed
+            },
+            {
+              $addToSet: { correctGuessers: player.sessionId },
+              $inc: { [`players.$.score`]: points },
+              $set: { 
+                [`roundPoints.${player.sessionId}`]: points,
+                lastActivity: new Date()
+              }
+            }
+          );
+
+          if (updateResult.modifiedCount > 0) {
+            // Check if everyone guessed for early end
+            const updatedRoom = await Room.findOne({ roomId });
+            if (updatedRoom) {
+              const drawer = getDrawer(updatedRoom);
+              const connectedNonDrawers = updatedRoom.players.filter(p => 
+                p.isConnected && p.sessionId !== drawer?.sessionId
+              ).length;
+              
+              if ((updatedRoom.correctGuessers?.length || 0) >= connectedNonDrawers) {
+                await endTurn(io, roomId);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('[GUESS] Failed to save correct guess:', error);
+        }
+      });
       
-      // Only check closeness if word is 3+ letters and distance is exactly 1
-      if (ans.length >= 3 && distance === 1) {
-        // Send private "close" message only to this player
-        socket.emit('closeGuess', { 
-          message: 'You are very close!' 
-        });
-      }
-      
-      // Echo wrong guess as chat message (use cleaned version)
-      io.to(roomId).emit('chat', { id: socket.id, name, msg: cleanedGuess });
+      return; // Exit early for correct guess
     }
+
+    // Check for "close" guess using edit distance
+    const distance = getEditDistance(g, ans);
+    
+    // Only check closeness if word is 3+ letters and distance is exactly 1
+    if (ans.length >= 3 && distance === 1) {
+      // Send private "close" message only to this player
+      socket.emit('closeGuess', { 
+        message: 'You are very close!' 
+      });
+    }
+    
+    // Echo wrong guess as chat message immediately (use cleaned version)
+    io.to(roomId).emit('chat', { id: socket.id, name, msg: cleanedGuess });
+    
+    // Save wrong guess to chat history asynchronously
+    updateRoomActivity(roomId);
+    setImmediate(async () => {
+      try {
+        await Room.updateOne(
+          { roomId },
+          { 
+            $push: { 
+              chat: { 
+                $each: [{ id: socket.id, name, msg: cleanedGuess, ts: new Date() }],
+                $slice: -50 // Keep only last 50 messages
+              }
+            },
+            lastActivity: new Date()
+          }
+        );
+      } catch (error) {
+        console.error('[GUESS] Failed to save wrong guess:', error);
+      }
+    });
   });
 
   // -------------------------------------------------
@@ -1046,6 +1206,10 @@ io.on('connection', (socket: Socket) => {
   // -------------------------------------------------
   socket.on('disconnect', async () => {
     console.log('[SESSION] Player disconnected:', socket.id);
+
+    // Clean up rate limiting data for this socket
+    drawingRateLimit.delete(socket.id);
+    chatRateLimit.delete(socket.id);
 
     // Find all rooms the socket was in (usually one)
     const rooms = Array.from(socket.rooms).filter(r => r !== socket.id);
@@ -1116,9 +1280,31 @@ async function updateRoomActivity(roomId: string) {
 // Initialize database and then start server
 initializeServer();
 
-// Start room cleanup interval
+// Cleanup rate limiting data periodically
+function cleanupRateLimits() {
+  const now = Date.now();
+  
+  // Clean expired drawing rate limits
+  for (const [socketId, limit] of drawingRateLimit.entries()) {
+    if (now > limit.resetTime) {
+      drawingRateLimit.delete(socketId);
+    }
+  }
+  
+  // Clean expired chat rate limits
+  for (const [socketId, limit] of chatRateLimit.entries()) {
+    if (now > limit.resetTime) {
+      chatRateLimit.delete(socketId);
+    }
+  }
+  
+  console.log(`[CLEANUP] Rate limits cleaned. Drawing: ${drawingRateLimit.size}, Chat: ${chatRateLimit.size}`);
+}
+
+// Start cleanup intervals
 setInterval(cleanupInactiveRooms, ROOM_CLEANUP_INTERVAL);
-console.log('[CLEANUP] Room cleanup service started');
+setInterval(cleanupRateLimits, 5 * 60 * 1000); // Clean rate limits every 5 minutes
+console.log('[CLEANUP] Cleanup services started');
 
 server.listen(PORT, () => {
   console.log(`drawzzl backend running on port ${PORT}`);
