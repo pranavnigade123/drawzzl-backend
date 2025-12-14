@@ -860,6 +860,8 @@ io.on('connection', (socket: Socket) => {
       const isHost = room.players[0]?.sessionId === sessionId;
       const currentDrawer = getDrawer(room);
       const timeLeft = room.turnEndsAt ? Math.max(0, Math.ceil((new Date(room.turnEndsAt).getTime() - Date.now()) / 1000)) : 0;
+      
+      console.log(`[RECONNECT DEBUG] Host check - First player: ${room.players[0]?.name} (${room.players[0]?.sessionId}), Reconnecting: ${player.name} (${sessionId}), IsHost: ${isHost}`);
 
       const gameState = {
         gameStarted: room.gameStarted,
