@@ -10,10 +10,13 @@ import { validateMessage, containsProfanity } from './lib/profanityFilter.js';
 
 interface Player {
   id: string;
+  sessionId: string;       // Persistent session ID
   name: string;
   score: number;
   isDrawer?: boolean;
   avatar?: number[]; // [colorIdx, eyeIdx, mouthIdx, accessoryIdx]
+  isConnected: boolean;    // Connection status
+  lastSeen: Date;          // Last activity timestamp
 }
 
 const app = express();
