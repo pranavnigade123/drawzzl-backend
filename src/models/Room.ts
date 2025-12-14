@@ -2,11 +2,14 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface Player {
-  id: string;
+  id: string;              // Socket ID (changes on reconnect)
+  sessionId: string;       // Persistent session ID (never changes)
   name: string;
   score: number;
   isDrawer?: boolean;
-  avatar?: number[]; // [colorIdx, eyeIdx, mouthIdx, accessoryIdx]
+  avatar?: number[];       // [colorIdx, eyeIdx, mouthIdx, accessoryIdx]
+  isConnected: boolean;    // Connection status
+  lastSeen: Date;          // Last activity timestamp
 }
 
 export interface ChatItem {
@@ -43,10 +46,14 @@ export interface IRoom extends Document {
   customWordProbability: number;     // 0-100 percentage
 
   // round tracking
-  roundPoints: Map<string, number>;  // playerId -> points earned this round
+  roundPoints: Map<string, number>;  // sessionId -> points earned this round
   revealedLetters: number[];         // indices of revealed letters
 
+  // canvas persistence
+  currentDrawing: any[];             // Current drawing data for reconnection
+
   createdAt: Date;
+  lastActivity: Date;                // Last activity in room (for cleanup)
 }
 
 const ChatSchema = new Schema<ChatItem>(
@@ -64,11 +71,14 @@ const RoomSchema = new Schema<IRoom>(
     roomId: { type: String, required: true, unique: true },
     players: [
       {
-        id: { type: String, required: true },
+        id: { type: String, required: true },           // Socket ID
+        sessionId: { type: String, required: true },    // Persistent session ID
         name: { type: String, required: true },
         score: { type: Number, default: 0 },
         isDrawer: { type: Boolean, default: false },
         avatar: { type: [Number], default: [0, 0, 0, 0] },
+        isConnected: { type: Boolean, default: true },
+        lastSeen: { type: Date, default: Date.now },
       },
     ],
     maxPlayers: { type: Number, default: 8 },
@@ -94,7 +104,11 @@ const RoomSchema = new Schema<IRoom>(
     roundPoints: { type: Map, of: Number, default: new Map() },
     revealedLetters: { type: [Number], default: [] },
 
+    // canvas persistence
+    currentDrawing: { type: Schema.Types.Mixed, default: [] },
+
     createdAt: { type: Date, default: Date.now },
+    lastActivity: { type: Date, default: Date.now },
   },
   { timestamps: false }
 );
