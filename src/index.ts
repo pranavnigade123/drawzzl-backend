@@ -50,16 +50,80 @@ const io = new Server(server, {
 // ---------------------------------------------------------------------
 // DB
 // ---------------------------------------------------------------------
-connectDB().catch((err: Error) => {
-  console.error('DB connection failed:', err);
-  process.exit(1);
-});
+let dbConnected = false;
+
+async function initializeServer() {
+  try {
+    await connectDB();
+    dbConnected = true;
+    console.log('Database connected, setting up socket handlers...');
+    setupSocketHandlers();
+  } catch (err) {
+    console.error('DB connection failed:', err);
+    process.exit(1);
+  }
+}
 
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+function generateSessionId() {
+  return 'session_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+}
+
+// Room cleanup function
+async function cleanupInactiveRooms() {
+  try {
+    const now = new Date();
+    const rooms = await Room.find({});
+    
+    for (const room of rooms) {
+      const timeSinceActivity = now.getTime() - room.lastActivity.getTime();
+      const connectedPlayers = room.players.filter(p => p.isConnected).length;
+      
+      let shouldDelete = false;
+      let reason = '';
+      
+      // Delete empty rooms after 5 minutes
+      if (connectedPlayers === 0 && timeSinceActivity > EMPTY_ROOM_EXPIRY) {
+        shouldDelete = true;
+        reason = 'empty room timeout';
+      }
+      // Delete inactive rooms after 1 hour
+      else if (timeSinceActivity > ROOM_EXPIRY_TIME) {
+        shouldDelete = true;
+        reason = 'inactivity timeout';
+      }
+      
+      if (shouldDelete) {
+        console.log(`[CLEANUP] Deleting room ${room.roomId} (${reason})`);
+        
+        // Clear any intervals for this room
+        const interval = roomIntervals.get(room.roomId);
+        if (interval) {
+          clearInterval(interval);
+          roomIntervals.delete(room.roomId);
+        }
+        
+        const timeout = wordSelectionTimeouts.get(room.roomId);
+        if (timeout) {
+          clearTimeout(timeout);
+          wordSelectionTimeouts.delete(room.roomId);
+        }
+        
+        endTurnInProgress.delete(room.roomId);
+        
+        // Delete the room
+        await Room.deleteOne({ roomId: room.roomId });
+      }
+    }
+  } catch (error) {
+    console.error('[CLEANUP] Error cleaning up rooms:', error);
+  }
 }
 
 // === Turn engine config ===
@@ -73,6 +137,11 @@ const DRAWER_BONUS_PER_GUESSER = 50;
 const roomIntervals = new Map<string, NodeJS.Timeout>();
 const wordSelectionTimeouts = new Map<string, NodeJS.Timeout>();
 const endTurnInProgress = new Map<string, boolean>();
+
+// Room cleanup constants
+const ROOM_CLEANUP_INTERVAL = 10 * 60 * 1000; // Check every 10 minutes
+const ROOM_EXPIRY_TIME = 60 * 60 * 1000; // 1 hour of inactivity
+const EMPTY_ROOM_EXPIRY = 5 * 60 * 1000; // 5 minutes for empty rooms
 
 function maskWord(word: string, revealedIndices: number[] = []) {
   return word
@@ -183,8 +252,11 @@ async function endTurn(io: Server, roomId: string) {
   if (drawer) {
     drawer.score = (drawer.score || 0) + drawerBonus;
     // Track drawer's round points
-    room.roundPoints.set(drawer.id, drawerBonus);
+    room.roundPoints.set(drawer.sessionId, drawerBonus);
   }
+
+  // Save room with updated scores
+  await room.save();
 
   // Prepare round results with points earned this round
   const playersWithRoundPoints = room.players.map((p: Player) => ({
@@ -192,7 +264,7 @@ async function endTurn(io: Server, roomId: string) {
     name: p.name,
     score: p.score || 0,
     avatar: p.avatar,
-    roundPoints: room.roundPoints.get(p.id) || 0,
+    roundPoints: room.roundPoints.get(p.sessionId) || 0,
   }));
 
   io.to(roomId).emit('turnEnded', {
@@ -511,15 +583,16 @@ function startDrawingPhase(io: Server, room: any, word: string, drawTime: number
 }
 
 // ---------------------------------------------------------------------
-// Socket connection
+// Socket connection setup function
 // ---------------------------------------------------------------------
+function setupSocketHandlers() {
 io.on('connection', (socket: Socket) => {
   console.log('Player connected:', socket.id);
 
   // -------------------------------------------------
   // CREATE ROOM
   // -------------------------------------------------
-  socket.on('createRoom', async ({ playerName, avatar }) => {
+  socket.on('createRoom', async ({ playerName, avatar, sessionId }) => {
     try {
       // Validate player name
       const cleanedName = validateMessage(playerName);
@@ -529,9 +602,20 @@ io.on('connection', (socket: Socket) => {
       }
 
       const roomId = generateRoomId();
+      const playerSessionId = sessionId || generateSessionId();
+      
       const newRoom = new Room({
         roomId,
-        players: [{ id: socket.id, name: cleanedName, score: 0, isDrawer: true, avatar: avatar || [0, 0, 0, 0] }],
+        players: [{ 
+          id: socket.id, 
+          sessionId: playerSessionId,
+          name: cleanedName, 
+          score: 0, 
+          isDrawer: true, 
+          avatar: avatar || [0, 0, 0, 0],
+          isConnected: true,
+          lastSeen: new Date()
+        }],
         gameStarted: false,
         round: 1,
         drawerIndex: 0,
@@ -544,11 +628,17 @@ io.on('connection', (socket: Socket) => {
         customWordProbability: 0,
         roundPoints: new Map(),
         revealedLetters: [],
+        currentDrawing: [],
       });
       await newRoom.save();
 
       socket.join(roomId);
-      socket.emit('roomCreated', { roomId, playerId: socket.id });
+      socket.emit('roomCreated', { 
+        roomId, 
+        playerId: socket.id, 
+        sessionId: playerSessionId,
+        isHost: true 
+      });
       
       // Ensure creator gets player list
       const playerUpdate = { players: newRoom.players };
@@ -618,7 +708,7 @@ io.on('connection', (socket: Socket) => {
   // -------------------------------------------------
   // JOIN ROOM
   // -------------------------------------------------
-  socket.on('joinRoom', async ({ roomId, playerName, avatar }) => {
+  socket.on('joinRoom', async ({ roomId, playerName, avatar, sessionId }) => {
     try {
       // Validate player name
       const cleanedName = validateMessage(playerName);
@@ -637,14 +727,28 @@ io.on('connection', (socket: Socket) => {
         return;
       }
 
+      const playerSessionId = sessionId || generateSessionId();
       const alreadyIn = room.players.some((p: Player) => p.id === socket.id);
       if (!alreadyIn) {
-        room.players.push({ id: socket.id, name: cleanedName, score: 0, avatar: avatar || [0, 0, 0, 0] });
+        room.players.push({ 
+          id: socket.id, 
+          sessionId: playerSessionId,
+          name: cleanedName, 
+          score: 0, 
+          avatar: avatar || [0, 0, 0, 0],
+          isConnected: true,
+          lastSeen: new Date()
+        });
         await room.save();
       }
 
       socket.join(roomId);
-      socket.emit('roomJoined', { roomId });
+      const isHost = room.players[0]?.sessionId === playerSessionId;
+      socket.emit('roomJoined', { 
+        roomId, 
+        sessionId: playerSessionId,
+        isHost 
+      });
 
       // broadcast fresh player list with acknowledgment
       const playerUpdate = { players: room.players };
@@ -653,9 +757,85 @@ io.on('connection', (socket: Socket) => {
       // Also send directly to joining player as backup
       socket.emit('playerJoined', playerUpdate);
       
-      console.log(`${playerName} joined ${roomId}`);
+      console.log(`[SESSION] ${cleanedName} joined ${roomId} (${playerSessionId})`);
     } catch (err) {
       socket.emit('error', { message: 'Failed to join room' });
+    }
+  });
+
+  // -------------------------------------------------
+  // RECONNECTION HANDLER
+  // -------------------------------------------------
+  socket.on('reconnectToRoom', async ({ sessionId, roomId }) => {
+    try {
+      // Check if database is connected
+      if (!dbConnected) {
+        console.log(`[SESSION] Database not ready, rejecting reconnection for ${sessionId}`);
+        socket.emit('error', { message: 'Server not ready, please try again' });
+        return;
+      }
+
+      console.log(`[SESSION] Reconnection attempt - Session: ${sessionId}, Room: ${roomId}`);
+      
+      const room = await Room.findOne({ roomId });
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      // Find player by session ID
+      const player = room.players.find((p: Player) => p.sessionId === sessionId);
+      if (!player) {
+        socket.emit('error', { message: 'Session not found in room' });
+        return;
+      }
+
+      // Update player's socket ID and connection status
+      player.id = socket.id;
+      player.isConnected = true;
+      player.lastSeen = new Date();
+      await room.save();
+
+      // Join socket to room
+      socket.join(roomId);
+
+      // Send complete game state for synchronization
+      const isHost = room.players[0]?.sessionId === sessionId;
+      const currentDrawer = getDrawer(room);
+      const timeLeft = room.turnEndsAt ? Math.max(0, Math.ceil((new Date(room.turnEndsAt).getTime() - Date.now()) / 1000)) : 0;
+
+      socket.emit('reconnectionSuccess', {
+        roomId,
+        sessionId,
+        isHost,
+        player: player,
+        gameState: {
+          gameStarted: room.gameStarted,
+          round: room.round,
+          maxRounds: room.maxRounds,
+          timeLeft: timeLeft,
+          currentDrawer: currentDrawer,
+          wordHint: room.gameStarted ? maskWord(room.currentWord || '', room.revealedLetters || []) : '',
+          isYourTurn: player.sessionId === currentDrawer?.sessionId,
+          currentDrawing: room.currentDrawing || [],
+          players: room.players,
+          recentChat: room.chat.slice(-10) || []
+        }
+      });
+
+      // Notify other players about reconnection
+      socket.to(roomId).emit('playerReconnected', { 
+        playerName: player.name,
+        playerId: player.sessionId
+      });
+
+      // Send updated player list
+      io.to(roomId).emit('playerJoined', { players: room.players });
+
+      console.log(`[SESSION] ${player.name} reconnected to ${roomId} successfully`);
+    } catch (err) {
+      console.error('[SESSION] Reconnection error:', err);
+      socket.emit('error', { message: 'Failed to reconnect' });
     }
   });
 
@@ -728,11 +908,39 @@ io.on('connection', (socket: Socket) => {
   // -------------------------------------------------
   // DRAW & CLEAR
   // -------------------------------------------------
-  socket.on('draw', ({ roomId, lines }) => {
+  socket.on('draw', async ({ roomId, lines }) => {
+    // Broadcast immediately for low latency
     socket.to(roomId).emit('draw', { lines });
+
+    // Update room activity
+    updateRoomActivity(roomId);
+    
+    // Save drawing state to room for reconnection (async, non-blocking)
+    setImmediate(async () => {
+      try {
+        const room = await Room.findOne({ roomId });
+        if (room) {
+          room.currentDrawing = lines;
+          await room.save();
+        }
+      } catch (error) {
+        console.error('[CANVAS] Failed to save drawing state:', error);
+      }
+    });
   });
 
-  socket.on('clearCanvas', ({ roomId }) => {
+  socket.on('clearCanvas', async ({ roomId }) => {
+    // Clear saved drawing state
+    try {
+      const room = await Room.findOne({ roomId });
+      if (room) {
+        room.currentDrawing = [];
+        await room.save();
+      }
+    } catch (error) {
+      console.error('[CANVAS] Failed to clear drawing state:', error);
+    }
+    
     socket.to(roomId).emit('clearCanvas');
   });
 
@@ -742,6 +950,9 @@ io.on('connection', (socket: Socket) => {
   socket.on('chat', async ({ roomId, msg, name }) => {
     const room = await Room.findOne({ roomId });
     if (!room || !msg?.trim()) return;
+
+    // Update room activity
+    updateRoomActivity(roomId);
     
     // Validate and filter message
     const cleanedMsg = validateMessage(msg);
@@ -775,38 +986,39 @@ io.on('connection', (socket: Socket) => {
 
     // Check if exact match
     if (g === ans) {
-      const isDrawer = socket.id === getDrawer(room)?.id;
-      const already = room.correctGuessers?.includes(socket.id);
+      const player = room.players.find((p: Player) => p.id === socket.id);
+      if (!player) return;
+      
+      const drawer = getDrawer(room);
+      const isDrawer = player.sessionId === drawer?.sessionId;
+      const already = room.correctGuessers?.includes(player.sessionId);
       if (isDrawer || already) return;
 
       room.correctGuessers = Array.isArray(room.correctGuessers) ? room.correctGuessers : [];
-      room.correctGuessers.push(socket.id);
+      room.correctGuessers.push(player.sessionId);
 
       // Calculate points based on time remaining (Linear Decay)
       const endsAt = room.turnEndsAt ? new Date(room.turnEndsAt).getTime() : 0;
       const timeRemaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
       const points = calculatePoints(timeRemaining, TURN_SECONDS);
 
-      const player = room.players.find((p: Player) => p.id === socket.id);
-      if (player) {
-        player.score = (player.score || 0) + points;
-        // Track round points
-        room.roundPoints.set(socket.id, points);
-      }
+      player.score = (player.score || 0) + points;
+      // Track round points using sessionId
+      room.roundPoints.set(player.sessionId, points);
 
       await room.save();
 
       // Broadcast correct guess
       io.to(roomId).emit('correctGuess', {
-        playerId: socket.id,
+        playerId: player.sessionId,
         name,
         points,
-        total: player?.score ?? 0,
+        total: player.score,
       });
 
       // Everyone (except drawer) guessed → end early
-      const nonDrawers = Math.max(0, room.players.length - 1);
-      if ((room.correctGuessers?.length || 0) >= nonDrawers) {
+      const connectedNonDrawers = room.players.filter(p => p.isConnected && p.sessionId !== drawer?.sessionId).length;
+      if ((room.correctGuessers?.length || 0) >= connectedNonDrawers) {
         await endTurn(io, roomId);
       }
     } else {
@@ -830,7 +1042,7 @@ io.on('connection', (socket: Socket) => {
   // DISCONNECT – clean up player & possibly end game
   // -------------------------------------------------
   socket.on('disconnect', async () => {
-    console.log('Player disconnected:', socket.id);
+    console.log('[SESSION] Player disconnected:', socket.id);
 
     // Find all rooms the socket was in (usually one)
     const rooms = Array.from(socket.rooms).filter(r => r !== socket.id);
@@ -838,69 +1050,73 @@ io.on('connection', (socket: Socket) => {
       const room = await Room.findOne({ roomId });
       if (!room) continue;
 
-      // Check if disconnecting player was the host (first player)
-      const wasHost = room.players.length > 0 && room.players[0]?.id === socket.id;
-      const hostName = room.players[0]?.name;
       const disconnectingPlayer = room.players.find(p => p.id === socket.id);
+      if (!disconnectingPlayer) continue;
       
-      console.log(`[DRAWER DEBUG] Player disconnecting: ${disconnectingPlayer?.name}, drawerIndex before: ${room.drawerIndex}, players before: ${room.players.length}`);
+      console.log(`[SESSION] Player ${disconnectingPlayer.name} (${disconnectingPlayer.sessionId}) disconnected from ${roomId}`);
 
-      // Remove player
-      room.players = room.players.filter((p: Player) => p.id !== socket.id);
+      // Mark player as disconnected instead of removing them
+      disconnectingPlayer.isConnected = false;
+      disconnectingPlayer.lastSeen = new Date();
 
-      console.log(`[DRAWER DEBUG] After player removal - players: ${room.players.length}, drawerIndex: ${room.drawerIndex}`);
-
-      // If the drawer index is now out of range, clamp it
-      if ((room.drawerIndex ?? 0) >= room.players.length) {
-        const oldIndex = room.drawerIndex;
-        room.drawerIndex = 0;
-        console.log(`[DRAWER DEBUG] DrawerIndex out of range! Changed from ${oldIndex} to ${room.drawerIndex}`);
+      // Check if all players are disconnected
+      const connectedPlayers = room.players.filter(p => p.isConnected);
+      
+      if (connectedPlayers.length === 0) {
+        // All players disconnected - clean up room after delay
+        console.log(`[SESSION] All players disconnected from ${roomId}, scheduling cleanup`);
+        setTimeout(async () => {
+          const freshRoom = await Room.findOne({ roomId });
+          if (freshRoom && freshRoom.players.every(p => !p.isConnected)) {
+            await Room.deleteOne({ roomId });
+            const t = roomIntervals.get(roomId);
+            if (t) clearInterval(t);
+            roomIntervals.delete(roomId);
+            const wst = wordSelectionTimeouts.get(roomId);
+            if (wst) clearTimeout(wst);
+            wordSelectionTimeouts.delete(roomId);
+            endTurnInProgress.delete(roomId);
+            console.log(`[SESSION] Room ${roomId} deleted - all players offline`);
+          }
+        }, 300000); // 5 minutes delay
       }
 
       await room.save();
 
-      // If room empty → delete
-      if (room.players.length === 0) {
-        await Room.deleteOne({ roomId });
-        const t = roomIntervals.get(roomId);
-        if (t) clearInterval(t);
-        roomIntervals.delete(roomId);
-        const wst = wordSelectionTimeouts.get(roomId);
-        if (wst) clearTimeout(wst);
-        wordSelectionTimeouts.delete(roomId);
-        endTurnInProgress.delete(roomId);
-        console.log(`Room ${roomId} deleted – empty`);
-        continue;
-      }
+      // Notify other players about disconnection
+      socket.to(roomId).emit('playerDisconnected', { 
+        playerName: disconnectingPlayer.name,
+        playerId: disconnectingPlayer.sessionId
+      });
 
-      // If host left, notify about new host
-      if (wasHost && room.players.length > 0) {
-        const newHost = room.players[0];
-        if (newHost) {
-          io.to(roomId).emit('chat', {
-            id: 'system',
-            name: 'System',
-            msg: `${hostName} left. ${newHost.name} is now the host.`
-          });
-        }
-      }
-
-      // broadcast updated players list with retry
-      const playerUpdate = { players: room.players };
-      io.to(roomId).emit('playerJoined', playerUpdate);
-      
-      // Also emit to all sockets in room as backup
-      setTimeout(() => {
-        io.to(roomId).emit('playerJoined', playerUpdate);
-      }, 100);
+      // Send updated player list
+      io.to(roomId).emit('playerJoined', { players: room.players });
     }
   });
 });
+} // End of setupSocketHandlers function
 
 // ---------------------------------------------------------------------
 // Server start
 // ---------------------------------------------------------------------
 const PORT = process.env.PORT || 4000;
+
+// Helper function to update room activity
+async function updateRoomActivity(roomId: string) {
+  try {
+    await Room.updateOne({ roomId }, { lastActivity: new Date() });
+  } catch (error) {
+    console.error('[ACTIVITY] Failed to update room activity:', error);
+  }
+}
+
+// Initialize database and then start server
+initializeServer();
+
+// Start room cleanup interval
+setInterval(cleanupInactiveRooms, ROOM_CLEANUP_INTERVAL);
+console.log('[CLEANUP] Room cleanup service started');
+
 server.listen(PORT, () => {
   console.log(`drawzzl backend running on port ${PORT}`);
 });
