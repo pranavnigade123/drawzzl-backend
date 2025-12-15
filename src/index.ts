@@ -855,6 +855,8 @@ io.on('connection', (socket: Socket) => {
       const currentDrawer = getDrawer(room);
       const timeLeft = room.turnEndsAt ? Math.max(0, Math.ceil((new Date(room.turnEndsAt).getTime() - Date.now()) / 1000)) : 0;
       
+      const isDrawer = player.sessionId === currentDrawer?.sessionId;
+      
       const gameState = {
         gameStarted: room.gameStarted,
         round: room.round,
@@ -862,10 +864,12 @@ io.on('connection', (socket: Socket) => {
         timeLeft: timeLeft,
         currentDrawer: currentDrawer,
         wordHint: room.gameStarted ? maskWord(room.currentWord || '', room.revealedLetters || []) : '',
-        isYourTurn: player.sessionId === currentDrawer?.sessionId,
+        isYourTurn: isDrawer,
         currentDrawing: room.currentDrawing || [],
         players: room.players,
-        recentChat: room.chat.slice(-10) || []
+        recentChat: room.chat.slice(-10) || [],
+        // Send actual word only to the drawer
+        currentWord: isDrawer && room.gameStarted ? room.currentWord : undefined
       };
 
       socket.emit('reconnectionSuccess', {
@@ -920,8 +924,9 @@ io.on('connection', (socket: Socket) => {
         playerId: player.sessionId
       });
 
-      // Send updated player list
-      io.to(roomId).emit('playerJoined', { players: room.players });
+      // Send updated player list (only connected players)
+      const connectedPlayersForReconnect = room.players.filter(p => p.isConnected);
+      io.to(roomId).emit('playerJoined', { players: connectedPlayersForReconnect });
 
       console.log(`[SESSION] ${player.name} reconnected to ${roomId} successfully`);
     } catch (err) {
@@ -1191,6 +1196,82 @@ io.on('connection', (socket: Socket) => {
   });
 
   // -------------------------------------------------
+  // LEAVE ROOM – explicit leave (different from disconnect)
+  // -------------------------------------------------
+  socket.on('leaveRoom', async ({ roomId }, callback) => {
+    try {
+      console.log('[SESSION] Player explicitly leaving room:', socket.id, roomId);
+      
+      const room = await Room.findOne({ roomId });
+      if (!room) {
+        if (callback) callback({ success: false, message: 'Room not found' });
+        return;
+      }
+
+      const leavingPlayer = room.players.find(p => p.id === socket.id);
+      if (!leavingPlayer) {
+        if (callback) callback({ success: false, message: 'Player not found in room' });
+        return;
+      }
+
+      console.log(`[SESSION] Player ${leavingPlayer.name} explicitly leaving room ${roomId}`);
+
+      // Remove player completely (not just mark as disconnected)
+      room.players = room.players.filter(p => p.id !== socket.id);
+      
+      // Leave the socket room
+      socket.leave(roomId);
+
+      // If this was the last player, clean up the room
+      if (room.players.length === 0) {
+        await Room.deleteOne({ roomId });
+        const t = roomIntervals.get(roomId);
+        if (t) clearInterval(t);
+        roomIntervals.delete(roomId);
+        const wst = wordSelectionTimeouts.get(roomId);
+        if (wst) clearTimeout(wst);
+        wordSelectionTimeouts.delete(roomId);
+        endTurnInProgress.delete(roomId);
+        console.log(`[SESSION] Room ${roomId} deleted - last player left`);
+        if (callback) callback({ success: true });
+        return;
+      }
+
+      // If the leaving player was the host, transfer host to next player
+      const wasHost = room.players[0]?.sessionId === leavingPlayer.sessionId;
+      if (wasHost && room.players.length > 0) {
+        const newHostPlayer = room.players[0];
+        if (newHostPlayer) {
+          console.log(`[SESSION] Transferring host from ${leavingPlayer.name} to ${newHostPlayer.name}`);
+          // Emit host transfer to the new host
+          const newHost = room.players.find(p => p.sessionId === newHostPlayer.sessionId);
+          if (newHost) {
+            io.to(newHost.id).emit('hostTransferred', { isHost: true });
+          }
+        }
+      }
+
+      await room.save();
+
+      // Send updated player list (only connected players)
+      const connectedPlayers = room.players.filter(p => p.isConnected);
+      io.to(roomId).emit('playerJoined', { players: connectedPlayers });
+
+      // Notify about player leaving
+      socket.to(roomId).emit('playerLeft', { 
+        playerName: leavingPlayer.name,
+        playerId: leavingPlayer.sessionId
+      });
+
+      if (callback) callback({ success: true });
+
+    } catch (error) {
+      console.error('[SESSION] Error in leaveRoom:', error);
+      if (callback) callback({ success: false, message: 'Server error' });
+    }
+  });
+
+  // -------------------------------------------------
   // DISCONNECT – clean up player & possibly end game
   // -------------------------------------------------
   socket.on('disconnect', async () => {
@@ -1244,8 +1325,9 @@ io.on('connection', (socket: Socket) => {
         playerId: disconnectingPlayer.sessionId
       });
 
-      // Send updated player list
-      io.to(roomId).emit('playerJoined', { players: room.players });
+      // Send updated player list (only connected players)
+      const connectedPlayersForUpdate = room.players.filter(p => p.isConnected);
+      io.to(roomId).emit('playerJoined', { players: connectedPlayersForUpdate });
     }
   });
 });
