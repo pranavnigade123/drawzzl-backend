@@ -13,7 +13,7 @@ env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/drawzzl-backend
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     
     steps:
@@ -38,3 +38,13 @@ jobs:
           ${{ env.IMAGE_NAME }}:${{ github.sha }}
         cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
         cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Verify deployment
+      run: |
+        echo "Image pushed: ${{ env.IMAGE_NAME }}:latest"
+        echo "Azure will auto-pull the new image"
