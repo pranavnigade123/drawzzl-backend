@@ -1,4 +1,4 @@
-# 🎮 Drawzzl Backend
+n# 🎮 Drawzzl Backend
 
 <div align="center">
 
@@ -308,7 +308,26 @@ GET /health
 
 ## 🚀 Deployment
 
-### Railway (Recommended)
+### Docker Hub + Azure Container Apps (Recommended)
+
+Automated CI/CD pipeline using GitHub Actions.
+
+**Quick Setup:**
+
+1. Create Docker Hub access token
+2. Add GitHub secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+3. Configure Azure to use Docker Hub image
+4. Push to `main` branch - automatic deployment!
+
+See [CI/CD Setup Guide](.github/QUICKSTART.md) for detailed instructions.
+
+**What happens on every push:**
+```
+Code Push → GitHub Actions → Build Docker Image → 
+Push to Docker Hub → Azure Auto-Deploy
+```
+
+### Railway (Alternative)
 
 ```bash
 # Install Railway CLI

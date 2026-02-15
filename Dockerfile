@@ -4,17 +4,21 @@ FROM node:18-alpine
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files and tsconfig
 COPY package*.json ./
+COPY tsconfig.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install ALL dependencies (including dev dependencies for building)
+RUN npm ci --ignore-scripts
 
 # Copy source code
-COPY . .
+COPY src ./src
 
-# Build TypeScript
-RUN npm run build
+# Build TypeScript manually
+RUN npx tsc
+
+# Remove dev dependencies after build
+RUN npm prune --production
 
 # Expose port
 EXPOSE 4000

@@ -31,3 +31,4 @@ logs/
 # Deployment guides (keep local only)
 deploy-azure.md
 azure-containerapp.yaml
+.github/QUICKSTART.md
