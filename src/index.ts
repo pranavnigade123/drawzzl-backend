@@ -57,6 +57,25 @@ app.get('/health', async (req, res) => {
   }
 });
 
+// Version info endpoint for testing deployments
+app.get('/api/info', (req, res) => {
+  res.json({
+    name: 'Drawzzl Backend',
+    version: '2.0.0',
+    deployment: 'Azure Container Apps',
+    cicd: 'GitHub Actions + Docker Hub',
+    buildTime: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'production',
+    features: [
+      'Multi-stage Docker build',
+      'Automated CI/CD pipeline',
+      'WebSocket real-time communication',
+      'MongoDB persistence',
+      'Health monitoring'
+    ]
+  });
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { 
